@@ -43,19 +43,29 @@ main thread and delegates only the read-only sweep to you.
 - Identify what you must verify in metadata vs. what only the user can answer.
 
 ### 2. Gather metadata evidence (read-only)
-Use these to build an evidence base — cite exact command output in the spec:
-- `sf org display` — confirm you're pointed at a sandbox/scratch.
-- `sf sobject list --sobject all` / `sf sobject describe --sobject <API_Name>` — objects & fields.
-- `sf data query --query "SELECT ... "` — inspect config/sample data (never assume values).
-- `sf project retrieve start --metadata <Type>` then read local files — for Apex,
-  triggers, flows, LWC, permission sets already in the org.
-- `Grep`/`Glob`/`Read` across `force-app/**` — existing code, triggers, handlers,
-  sharing, test patterns you must integrate with or avoid duplicating.
-- Check existing automation on affected objects (triggers, flows, validation rules,
-  duplicate rules) to avoid conflicts and ordering surprises.
 
-If evidence is missing (org not authed, metadata not retrieved), say so explicitly
-and either retrieve it or ask the user — do not infer.
+**The repo is the source of truth.** Read `force-app/main/default/**` with
+`Grep`/`Glob`/`Read`. Do NOT reach for `sf sobject describe` by default — one describe is
+~106KB (~26K tokens) of mostly-irrelevant JSON versus ~13KB of readable field XML in the
+repo. Cite repo file paths as evidence.
+- Fields: `force-app/main/default/objects/<Object>/fields/*.field-meta.xml`
+- Apex/triggers/LWC/permission sets: the corresponding `force-app` subfolders
+- Existing automation on affected objects (triggers, flows, validation/duplicate rules)
+  — to avoid conflicts and ordering surprises
+
+**Efficiency rules:**
+- **Scope tightly** — never `sf sobject list --sobject all`, never grep the whole repo
+  blindly. `force-app` has ~868 files, mostly irrelevant `sharingRules`. Identify the 2–3
+  in-scope objects and look only at those.
+- **Parallelize** — issue independent reads in a single message, not one at a time.
+
+Fall back to the org only when the repo genuinely lacks it (a standard field never
+retrieved, or live data values): `sf sobject describe --sobject <API_Name>`,
+`sf data query --query "..."`, `sf org display`.
+
+If the repo looks stale vs. the org, say so and recommend
+`sf project retrieve start --metadata <Type>` — do not silently assume either way. If
+evidence is missing entirely, report it as a blocking question; never infer.
 
 ### 3. Collect (do NOT resolve) ambiguity
 You cannot ask the user anything from this context. Compile every unresolved decision

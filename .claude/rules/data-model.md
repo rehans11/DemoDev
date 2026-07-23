@@ -5,8 +5,13 @@ validation rules, record types). Adhere strictly.
 
 ## Verify before you change
 - **Never invent** object or field API names, picklist values, or relationships.
-  Confirm current schema with `sf sobject describe --sobject <API_Name>` and read the
-  retrieved metadata first. The Architect must cite this evidence in the spec.
+- **The repo is the source of truth.** Confirm current schema by reading
+  `force-app/main/default/objects/<Object>/fields/*.field-meta.xml`. Cite those paths as
+  evidence in the spec. Only fall back to `sf sobject describe --sobject <API_Name>` when
+  the repo genuinely lacks the field (e.g. a standard field never retrieved) — a describe
+  is ~106KB of JSON versus ~13KB of readable XML.
+- If the repo may be stale vs. the org, run
+  `sf project retrieve start --metadata <Type>` first — never silently assume either way.
 - Check for existing fields/objects that already serve the need before creating new ones.
 
 ## Naming & structure

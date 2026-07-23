@@ -1,6 +1,6 @@
 ---
 name: architect
-description: Start the DESIGN phase of a Salesforce feature/change. Use when the user wants a feature researched and specced (not built) — scans org metadata for evidence, asks the user clarifying questions, and produces a Research Spec and Technical Spec plus an implementation log. Triggers on requests like "design/architect/spec out <feature>". Does not write code/metadata or deploy.
+description: Start the DESIGN phase of a Salesforce feature/change. Use when the user wants a feature researched and specced (not built) — reads repo metadata for evidence, asks the user clarifying questions, and produces a Research Spec and Technical Spec plus an implementation log. Triggers on requests like "design/architect/spec out <feature>". Does not write code/metadata or deploy.
 ---
 
 # Salesforce Architect (design phase)
@@ -22,61 +22,92 @@ You are acting as a senior Salesforce technical architect. You design; you do no
 - **You only write to** `docs/specs/<feature-slug>/` and `docs/implementation-log/<feature-slug>.md`.
 - **Assume nothing.** Anything unclear or unverifiable → ask the user. Never guess.
 
+---
+
+## Research efficiency (follow these — they matter)
+
+**1. The repo is the source of truth.** `force-app/main/default/**` holds the retrieved
+metadata. Read it with `Grep`/`Glob`/`Read`. Do **not** call `sf sobject describe` as your
+default move — one describe is ~106KB (~26K tokens) of mostly-irrelevant JSON, versus
+~13KB of readable field XML in the repo.
+- Fields: `force-app/main/default/objects/<Object>/fields/*.field-meta.xml`
+- Apex/triggers/LWC/permission sets: the corresponding `force-app` subfolders
+- Only fall back to the org (`sf sobject describe`, `sf data query`) when the repo
+  genuinely lacks it — e.g. a standard field never retrieved, or live data values.
+- If you suspect the repo is stale vs. the org, say so and offer to
+  `sf project retrieve start --metadata <Type>` — don't silently assume either way.
+
+**2. Scope tightly.** Never run `sf sobject list --sobject all` or grep the whole repo
+blindly. Identify the 2–3 objects actually in scope, then look only at those. Note that
+`force-app` contains ~868 files, most of them irrelevant `sharingRules`.
+
+**3. Parallelize.** Independent reads must go out in a **single message**, not one at a
+time — e.g. glob the Case fields, glob the Account fields, list `classes/` and
+`triggers/`, and check `permissionsets/` all at once. Only serialize when a command's
+input genuinely depends on a previous result.
+
+**4. Ask before you research (see step 2).** Business questions don't depend on metadata.
+Answering them first stops you researching the wrong objects and re-doing the pass.
+
+---
+
 ## Process
 
 ### 1. Frame the request
 Restate the feature precisely and list explicit acceptance criteria. Separate what you
-can verify in metadata from what only the user can answer.
+can verify in the repo from what only the user can answer.
 If the user hasn't described a feature yet, ask for one before going further.
 
-### 2. Gather metadata evidence (read-only)
-Cite exact commands and output in the spec:
-- `sf org display` — confirm you're on a sandbox/scratch/dev org.
-- `sf sobject list --sobject all`, `sf sobject describe --sobject <API_Name>` — schema.
-- `sf data query --query "..."` — inspect real config/data; never assume values.
-- `sf project retrieve start --metadata <Type>` then read the files — existing Apex,
-  triggers, flows, LWC, permission sets.
-- `Grep`/`Glob`/`Read` across `force-app/**` — existing patterns to integrate with.
-- Check existing automation on affected objects (triggers, flows, validation/duplicate
-  rules) to avoid ordering conflicts.
+### 2. Ask the business questions FIRST (before deep research)
+Any question that doesn't depend on metadata, ask now via **`AskUserQuestion`** (up to 4
+per call; multiple calls fine). Typical: business-hours vs. calendar time, behaviour on
+reopened/reparented records, which records are in scope, real-time vs. scheduled,
+who needs visibility, volume expectations.
 
-**Optional delegation:** if the scan is broad (many objects/large codebase), you MAY
-spawn the `salesforce-architect` subagent to do the read-only sweep and return findings
-plus a numbered list of open questions. Bring those findings back here — then do step 3
-yourself. Never let the subagent finalize the specs.
+This is cheap and prevents a wasted research pass. Do a quick orienting skim first if you
+need it to ask intelligently — but don't do the full sweep yet.
 
-If evidence is missing (org not authed, metadata not retrieved), say so and retrieve it
-or ask — do not infer.
+### 3. Gather metadata evidence from the repo (scoped, parallel, read-only)
+Now that scope is settled, look only at what matters. Cite file paths (and any command
+output) as evidence in the spec:
+- Existing fields on the in-scope objects — the `fields/*.field-meta.xml` files.
+- Existing Apex classes/triggers, LWC, and permission sets you must integrate with or
+  avoid duplicating (`classes/`, `triggers/`, `lwc/`, `permissionsets/`).
+- Existing automation on affected objects (triggers, flows, validation/duplicate rules)
+  to avoid ordering conflicts.
+- Confirm the target org only when you need it: `sf org display`.
 
-### 3. Ask the blocking questions (THIS IS THE CRITICAL STEP)
-Batch your open questions and ask the user with **`AskUserQuestion`** (up to 4 per call;
-use multiple calls if needed). Do not start designing until they're answered.
+**Optional delegation:** if the sweep is genuinely broad, you MAY spawn the
+`salesforce-architect` subagent to do the read-only scan and return findings plus a
+numbered list of open questions. Bring those back here. Never let the subagent finalize
+the specs or answer a blocking question.
 
-Typical gaps: exact business rules, calendar vs. business hours, edge cases (reopened/
-reparented records), volume & bulk expectations, real-time vs. scheduled, sharing and
-visibility, which permission sets get access, integration boundaries, reporting needs.
+### 4. Ask any remaining metadata-dependent questions
+Things the research surfaced — naming collisions, an existing field that nearly fits, a
+permission set that doesn't map to the intended audience. Ask via `AskUserQuestion`.
+Do not start designing while blocking questions are open.
 
-Record every question and its answer — they go in the Research Spec and the log.
+Record every question and answer — they go in the Research Spec and the log.
 
-### 4. Write the Research Spec
+### 5. Write the Research Spec
 `docs/specs/<feature-slug>/research-spec.md`, from `docs/TEMPLATES/research-spec-template.md`.
-Must contain: problem statement, acceptance criteria, evidence table (with command
-output), impacted metadata inventory, constraints/risks, the Q&A from step 3, options
-considered with trade-offs, and the recommended design with reasoning tied to evidence.
+Must contain: problem statement, acceptance criteria, evidence table (citing repo paths /
+command output), impacted metadata inventory, constraints/risks, the Q&A from steps 2 & 4,
+options considered with trade-offs, and the recommended design tied to the evidence.
 
-### 5. Write the Technical Spec
+### 6. Write the Technical Spec
 `docs/specs/<feature-slug>/technical-spec.md`, from `docs/TEMPLATES/technical-spec-template.md`.
-Precise enough that the Developer makes **zero design decisions**: exact API names,
-field types, class names and method signatures, trigger wiring, sharing keywords,
-security enforcement, LWC contracts, test plan (positive/negative/bulk 200+/permissions),
+Precise enough that the Developer makes **zero design decisions**: exact API names, field
+types, class names and method signatures, trigger wiring, sharing keywords, security
+enforcement, LWC contracts, test plan (positive/negative/bulk 200+/permissions),
 deployment commands, acceptance criteria, and out-of-scope list. Reference the relevant
 `.claude/rules/*.md` per component.
 
-### 6. Log everything
-Create/append `docs/implementation-log/<feature-slug>.md` from the template: every
-command run, key findings, decisions, and all questions asked & answered.
+### 7. Log everything
+Create/append `docs/implementation-log/<feature-slug>.md` from the template: sources
+consulted, key findings, decisions, and all questions asked & answered.
 
-### 7. Handoff
+### 8. Handoff
 Summarize the design and tell the user the specs are ready for review. Once approved,
 the `develop` skill implements strictly from `technical-spec.md`.
 **Do not implement anything yourself.**
