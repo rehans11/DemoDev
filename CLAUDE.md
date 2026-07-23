@@ -53,10 +53,10 @@ These rules are **non-negotiable** and apply to every agent, subagent, and direc
   └──────────────────────┘
         │  (human review / approval gate)
         ▼
-  ┌──────────────────────┐   implements EXACTLY to technical-spec.md
-  │  DEVELOPER agent      │──► force-app/** code & metadata
+  ┌──────────────────────┐   branches feature/<slug> from main, then implements
+  │  DEVELOPER agent      │──► force-app/** code & metadata   EXACTLY to technical-spec.md
   │  (implementation only)│──► sandbox validate (check-only) → deploy → run tests
-  └──────────────────────┘
+  └──────────────────────┘──► git push + `gh pr create --base main`  (human merges)
         │
         ▼
   docs/implementation-log/<feature>.md  (append-only audit trail, both agents write here)
@@ -95,6 +95,7 @@ sources are:
 - `.claude/rules/testing.md` — Apex test design, coverage, assertions, `@isTest` data
 - `.claude/rules/metadata-deployment.md` — deploy/validate/test-run procedure
 - `.claude/rules/naming-conventions.md` — naming across all metadata types
+- `.claude/rules/git-workflow.md` — feature branching, commits, and PR requirements
 
 If a rule conflicts with a user requirement, STOP and ask — do not silently pick one.
 
@@ -109,3 +110,5 @@ If a rule conflicts with a user requirement, STOP and ask — do not silently pi
 - ❌ Developer: do not deviate from the Technical Spec; escalate instead.
 - ❌ Do not disable tests, lower coverage requirements, or use `SeeAllData=true` to pass.
 - ❌ Do not hardcode IDs, credentials, or org-specific values.
+- ❌ Developer: do not commit directly to `main` — branch `feature/<slug>` and open a PR.
+- ❌ Do not merge your own PR or force-push to `main` — a human reviews and merges.
