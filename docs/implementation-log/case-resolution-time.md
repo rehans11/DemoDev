@@ -559,3 +559,10 @@ anyone who checks a record page first, so it is called out here and in the PR.
 
 **Status:** done — validate `0Afg500000CSJGvCAP`, deploy `0Afg500000CSJNNCA5`,
 test run `707g500000asxlL`, 72/72 passing, 93% org-wide coverage.
+
+### Branch & PR
+
+- **Branch:** `feature/case-resolution-time` (cut from up-to-date `main`, commit `3645a90`)
+- **PR:** https://github.com/rehans11/DemoDev/pull/1 — opened against `main`, **left for human review, not merged**
+
+**Status:** done — awaiting human review and merge.
