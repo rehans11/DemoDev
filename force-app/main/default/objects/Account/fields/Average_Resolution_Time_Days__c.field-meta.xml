@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Average_Resolution_Time_Days__c</fullName>
+    <description>Average of Resolution_Time_Days__c across this Account&apos;s closed Cases. Cases with no resolution time (open, or ClosedDate before CreatedDate) are excluded from the average but still counted in Closed_Case_Count__c. Do not edit manually.</description>
+    <externalId>false</externalId>
+    <inlineHelpText>Average calendar days to close a Case for this Account. Blank if no closed Case has a valid resolution time.</inlineHelpText>
+    <label>Average Resolution Time (Days)</label>
+    <precision>10</precision>
+    <required>false</required>
+    <scale>2</scale>
+    <trackFeedHistory>false</trackFeedHistory>
+    <type>Number</type>
+    <unique>false</unique>
+</CustomField>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Resolution_Time_Days__c</fullName>
+    <description>Calendar days between Case CreatedDate and ClosedDate. Populated automatically by CaseTriggerHandler when the Case is closed and cleared when it is reopened. Blank if the Case is open or if ClosedDate precedes CreatedDate. Do not edit manually.</description>
+    <externalId>false</externalId>
+    <inlineHelpText>Calendar days elapsed from Case creation to closure. Calculated automatically; blank while the Case is open.</inlineHelpText>
+    <label>Resolution Time (Days)</label>
+    <precision>10</precision>
+    <required>false</required>
+    <scale>2</scale>
+    <trackFeedHistory>false</trackFeedHistory>
+    <type>Number</type>
+    <unique>false</unique>
+</CustomField>
