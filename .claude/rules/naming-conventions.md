@@ -3,8 +3,10 @@
 Consistent, descriptive names across all metadata. No cryptic abbreviations.
 
 ## Apex
-- Classes: `PascalCase`. Suffix by role: `AccountTriggerHandler`, `AccountService`,
-  `AccountSelector`, `AccountController` (LWC-facing), `AccountTest`.
+- Classes: `PascalCase`. Suffix by role: `AccountTriggerHandler`, `AccountTriggerHelper`,
+  `AccountService`, `AccountSelector`, `AccountController` (LWC-facing), `AccountTest`.
+- Trigger framework trio for an object must match exactly: `AccountTrigger` →
+  `AccountTriggerHandler` → `AccountTriggerHelper` (see `triggers.md`).
 - Methods: `camelCase`, verb-first (`calculateDiscount`). Constants: `UPPER_SNAKE_CASE`.
 - Variables: `camelCase`, meaningful (no `x`, `tmp`, `l` for lists — use `accounts`).
 - One trigger per object: `<Object>Trigger` (e.g., `AccountTrigger`).

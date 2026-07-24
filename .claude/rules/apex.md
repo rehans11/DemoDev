@@ -3,8 +3,13 @@
 Applies to any `*.cls` under `force-app/**/classes/`. Adhere strictly.
 
 ## Architecture
-- Separate concerns: **Trigger handler → Service (business logic) → Selector (SOQL) →
-  Domain**. Keep triggers logic-free (see `triggers.md`).
+- Separate concerns. For trigger-driven work the mandatory chain is
+  **Trigger → Handler → Helper** (see `triggers.md`): the trigger only dispatches
+  contexts, the handler owns the `processedIds` recursion guard and delegates, the
+  helper holds the bulkified business logic.
+- The Helper may call **Service** (shared business logic) and **Selector** (SOQL)
+  classes when logic is reused beyond one trigger. Don't invent a service layer for
+  logic used in exactly one place — keep it in the helper.
 - Classes are `with sharing` by default. Use `without sharing` only when the spec
   explicitly justifies it; `inherited sharing` for reusable service/library classes.
 - No business logic in constructors; keep methods single-responsibility and testable.
