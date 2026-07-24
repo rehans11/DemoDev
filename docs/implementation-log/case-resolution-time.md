@@ -566,3 +566,97 @@ test run `707g500000asxlL`, 72/72 passing, 93% org-wide coverage.
 - **PR:** https://github.com/rehans11/DemoDev/pull/1 — opened against `main`, **left for human review, not merged**
 
 **Status:** done — awaiting human review and merge.
+
+---
+
+## 2026-07-23 — architect — Post-implementation verification & spec corrections
+
+**Context / goal:** Independently verify the Developer's report rather than relaying it, and
+fix the spec defects it surfaced so the documents and the code agree.
+
+**Actions & commands run:**
+```
+$ git log --oneline main..HEAD          → 2 commits on feature/case-resolution-time
+$ git log --oneline -1 main             → main unmoved
+$ gh pr list --state all                → PR #1 OPEN, base main, mergedAt: null
+$ git diff --name-only main..HEAD -- force-app/   → 47 files, all expected
+
+$ sf apex run test --tests <9 classes> --code-coverage --wait 20
+  → Test Run Id 707g500000atJf0 · 72 ran / 72 passed / 0 failed · Org Wide Coverage 93%
+
+$ sf data query --query "SELECT ApexClass.Name, JobType, Status FROM AsyncApexJob
+                         WHERE ApexClass.Name IN ('CaseResolutionBackfillBatch',
+                                                  'AccountCaseMetricsRecalcBatch')"
+  → 0 records                            (neither batch was ever executed — D6 respected)
+
+$ sf data query --query "SELECT COUNT(Id) FROM PermissionSetAssignment
+                         WHERE PermissionSet.Name = 'CaseResolutionMetrics_Read'"
+  → 0                                    (D5a respected)
+
+$ sf data query --use-tooling-api --query "SELECT QualifiedApiName, DataType FROM
+    FieldDefinition WHERE EntityDefinition.QualifiedApiName = 'Case'
+    AND QualifiedApiName = 'Resolution_Time_Days__c'"
+  → Resolution_Time_Days__c · Number(8, 2)   (precision 10 / scale 2 = 8 integer + 2 decimal)
+```
+
+Source inspection of `CaseTrigger`, `CaseResolutionService`, `CaseTriggerHandler`, plus greps
+for DML on Case, recursion flags, hardcoded `'Closed'`, and `PermissionSetAssignment`.
+
+**Findings — all four invariants verified in the shipped code:**
+
+| Invariant | Verified |
+|---|---|
+| 1 — stamp only on transition; `Closed → Closed` untouched | ✅ the `else` branch is present in `applyResolutionTimes` with its rationale comment |
+| 2 — zero DML on Case in the trigger path | ✅ grep finds DML keywords only inside comments; `triggerPerformsNoDmlOnCase` test passes |
+| 3 — `CaseResolutionService` pure | ✅ no SOQL/DML/`System.now()`; both dependencies injected |
+| 4 — no `IsClosed`/`ClosedDate` in a `before` context | ✅ read only in `dispatchRollup` (after) and `buildResolutionUpdates` (batch) |
+
+Also verified: no recursion flag anywhere; `'Closed'` never hardcoded outside tests;
+`TestDataFactory` correctly `@isTest`; sharing keyword present on every class.
+
+**Three spec defects confirmed as genuine — all mine, all found by the Developer:**
+
+1. **§6.6 asserted 1 Queueable for 250 Cases; the correct answer is 2.** DML processes in
+   200-record chunks, so the trigger fires twice over *disjoint* Account sets (1–4, then 5)
+   and the dedupe cannot merge passes that never overlap. My own §3.0.4 had scoped the
+   "1 Queueable" figure to "1 or 200 records" — the test contradicted the spec's own table.
+   **Fixed:** §3.0.4 now states the `⌈m/200⌉` rule explicitly; §6.6 asserts the formula.
+2. **§6.7 contradicted §2.2.** It required a *minimum-access* user to read the fields once
+   granted the permission set, but §2.2 deliberately grants no `objectPermissions`, and
+   `Field.isAccessible()` is false whenever object access is missing regardless of FLS. No
+   permission set of that shape could ever have satisfied it. **Fixed:** three explicit
+   cases — minimum-access negative, Standard User baseline, Standard User + permission set
+   positive — isolating the permission set as the sole variable. The Developer's
+   implementation is *stronger* than the original spec, not weaker.
+3. **§6.3's determinism precondition was unsatisfiable.** Case OWD is `ReadWriteTransfer`
+   (E22), so no user can "see none of the Cases" for sharing reasons. **Fixed**, and the
+   consequence recorded: `without sharing` on `AccountCaseRollupService` is currently
+   **belt-and-braces, not load-bearing**. It becomes load-bearing only if Case OWD is
+   tightened to Private/Public Read Only. Keyword and justification retained — the risk is
+   real but latent.
+
+**Two operational findings added to §7.5b:**
+- The new fields are invisible to **everyone including System Administrators** until
+  `CaseResolutionMetrics_Read` is assigned — a Metadata API field deploy grants FLS to no
+  profile, and this feature edits none by design. `SELECT Resolution_Time_Days__c FROM Case`
+  errors with *"No such column"* for the deploying admin. Expected, but indistinguishable
+  from a broken deploy at a glance.
+- `--source-dir force-app` cannot validate in this repo: 13 pre-existing components (12
+  `Settings` + `CleanDataService:DataCloudGeoLocation`) from the `base org metadata` commit
+  fail, none touched by this branch. **Pre-existing repo defect that will block CI on every
+  future change**; out of scope here, worth fixing separately.
+
+**Accepted deviations (behaviour-neutral, logged by the Developer):**
+`AccountCaseRollupQueueable` given `inherited sharing` (§3.10 requires a keyword on every
+class); `buildResolutionUpdates` built in its 1-arg form per §3.4/§3.9 (the §3.0.1 diagram
+showed 2 args and was the outlier); both batches `with sharing` (§3.10 says "*the one*
+`without sharing`").
+
+**Known coverage gap, documented rather than worked around:**
+`AccountCaseRollupQueueable` at 86% — lines 47–49 need a real `UNABLE_TO_LOCK_ROW`, which is
+not deterministically producible in Apex, and the spec itself forbids the retry chain from
+running under test. The retry *decision* is fully covered via the `retryScheduled` flag.
+
+**Status:** done — implementation verified, PR #1 open and unmerged, awaiting human review
+
+---

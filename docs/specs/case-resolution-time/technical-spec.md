@@ -437,7 +437,16 @@ Stamping and rollup-dispatch are now cleanly split across the before/after bound
 | | SOQL | DML | Queueable |
 |---|---|---|---|
 | **T1** — any Case DML, 1 or 200 records | **1** (`CaseStatus`, statically cached — once per transaction however many times the trigger fires) | **0** | **1** |
+| **T1** — Case DML of *m* records | **1** | **0** | **≤ ⌈m/200⌉** |
 | **T2** — rollup, *n* Accounts | **⌈n/500⌉** (1 for the trigger path, where *n* ≤ 400) | **1** | 0 (unless retrying) |
+
+⚠️ **Queueable count scales with DML *chunks*, not with records or Accounts.** The platform
+processes a DML statement in batches of 200, firing the trigger once per chunk. The
+per-transaction `enqueuedAccountIds` dedupe collapses *overlapping* Account sets across
+chunks, but it cannot merge chunks whose Account sets are **disjoint** — those legitimately
+need separate jobs. So a 250-record update spanning 5 Accounts (50 each, grouped) fires twice
+over Accounts 1–4 then Account 5, and enqueues **2** jobs. That is correct behaviour, not a
+dedupe failure. Assert against `⌈m/200⌉`, never against a literal `1`.
 
 Both are **constant with batch size**, which is what AC6 asserts. Nothing in either path
 scales per-record.
@@ -1120,7 +1129,19 @@ Also assert:
 | Account whose last closed Case was deleted | count falls back to `0`, average `null` (seeding step, AC5) |
 | Every processed Account | `Case_Metrics_Last_Calculated__c` is not null (D3c) |
 | Null / empty input | returns without exception and performs no DML |
-| Determinism (AC7) | run `recalculate` as a minimum-access user via `System.runAs` who can see none of the Cases; assert the stored count/average are **identical** to the admin-computed values — this is the test that proves the `without sharing` decision |
+| Determinism (AC7) | run `recalculate` under `System.runAs` as a non-admin user and assert the stored count/average are **identical** to the admin-computed values |
+
+> **Spec defect, corrected 2026-07-23.** An earlier draft required a user "who can see none
+> of the Cases". That precondition is **unsatisfiable in this org**: Case OWD is
+> `ReadWriteTransfer` (Research Spec E22) — public read/write — so any user with Case object
+> access sees every Case, and any user without it sees none *because of CRUD*, not sharing.
+>
+> **Consequence the reviewer should register:** `without sharing` on
+> `AccountCaseRollupService` is currently **belt-and-braces, not load-bearing**. It becomes
+> load-bearing the moment Case OWD is tightened to Private or Public Read Only — at which
+> point a user-mode aggregate would silently make each Account's average depend on who
+> clicked Save. Keep the keyword and its justification comment; the risk it guards is real
+> but latent. Re-run this test as a genuine visibility test if OWD ever changes.
 
 ### 6.4 `AccountCaseRollupQueueableTest`
 
@@ -1160,19 +1181,43 @@ org, and a second call in the same transaction does **not** issue another query 
     and **nothing else**. The trigger contributes zero DML however many records are in scope;
   - `Limits.getQueries()` inside the window is `<= 2` — the cached `CaseStatus` lookup does
     not repeat per record or per trigger pass;
-  - `Assert.areEqual(1, Limits.getQueueableJobs())` — the dedupe in §3.3 held.
+  - **`Limits.getQueueableJobs()` equals `⌈250/200⌉ = 2`** — one job per DML chunk, *not* one
+    per Case (250) and *not* one per Account (5). Assert against the chunk formula, not a
+    literal. See the warning in §3.0.4: with 50 grouped Cases per Account, chunk 1 covers
+    Accounts 1–4 and chunk 2 covers Account 5, so the two passes see **disjoint** Account
+    sets and the dedupe correctly cannot merge them.
+
+  > **Spec defect, corrected 2026-07-23.** An earlier draft asserted `1` here, which is
+  > arithmetically impossible for 250 records and contradicted this spec's own §3.0.4
+  > (which scoped the "1 Queueable" figure to "1 or 200 records"). Found during
+  > implementation.
 
 ### 6.7 `CaseResolutionMetricsSecurityTest` (permission / negative test)
 
-**Required by `.claude/rules/security.md`.**
-- Create a minimum-access user (inside `System.runAs(currentUser)` to avoid mixed DML).
-- `System.runAs(minUser)` **without** the permission set:
-  `Assert.isFalse(Schema.SObjectType.Case.fields.Resolution_Time_Days__c.isAccessible())` and
-  the same for the three Account fields.
-- Assign `CaseResolutionMetrics_Read`, then in a fresh `System.runAs(minUser)`:
-  - `Assert.isTrue(...isAccessible())` for all four fields;
-  - `Assert.isFalse(...isUpdateable())` for all four fields — **this is the assertion that
-    proves derived values cannot be hand-edited** (AC8, D5c).
+**Required by `.claude/rules/security.md`.** Create all users inside
+`System.runAs(new User(Id = UserInfo.getUserId()))` to avoid `MIXED_DML_OPERATION`.
+
+Three cases, and the choice of profile matters in each:
+
+1. **Negative — minimum-access user, no permission set.** Profile
+   `Minimum Access - Salesforce`. Assert `isAccessible() == false` for all four fields.
+2. **Baseline — Standard User, no permission set.** Assert
+   `Schema.SObjectType.Case.isAccessible() == true` (so object access is *not* the variable)
+   but all four fields `isAccessible() == false`.
+3. **Positive — Standard User **with** `CaseResolutionMetrics_Read`.** Assert:
+   - `isAccessible() == true` for all four fields;
+   - `isUpdateable() == false` for all four — **this is the assertion that proves derived
+     values cannot be hand-edited** (AC8, D5c).
+
+> **Spec defect, corrected 2026-07-23.** An earlier draft used the *minimum-access* user for
+> the positive case too. That can never pass and contradicted §2.2 of this same document:
+> §2.2 deliberately grants **no** `objectPermissions` (D5a, least privilege), and
+> `Field.isAccessible()` is false whenever object access is missing regardless of FLS. No
+> permission set of the specified shape could have satisfied it.
+>
+> Using a Standard User for cases 2 and 3 isolates the permission set as the **sole**
+> variable, which is what AC8 actually claims. The minimum-access negative case is retained
+> as case 1, so nothing is lost.
 
 ### 6.8 Batch tests
 
@@ -1252,6 +1297,29 @@ Run §6.9. Record run id, pass/fail, per-class coverage.
   that running it today would set the 23 dirty Cases to `null` and populate Account counts.
 - ❌ **Do not assign** `CaseResolutionMetrics_Read` to any user or profile (D5a).
 - ❌ **Do not** modify the seeded Case data to fix the `ClosedDate < CreatedDate` problem.
+
+### 7.5b Two things found during implementation (2026-07-23)
+
+**1. The fields are invisible to *everyone*, including System Administrators, until the
+permission set is assigned.** A Metadata API field deploy grants FLS to no profile, and this
+feature edits no profile by design (D5a). The immediate effect:
+
+```
+$ sf data query --query "SELECT COUNT(Id) FROM Case WHERE Resolution_Time_Days__c != null"
+  ERROR: No such column 'Resolution_Time_Days__c' on entity 'Case'
+```
+
+even as the deploying admin. The fields **do** exist — confirmed via Tooling API
+`FieldDefinition` (`Resolution_Time_Days__c`, `Number(8, 2)`). This is expected behaviour of
+the chosen security posture, not a broken deploy, but it looks exactly like one. **Assign
+`CaseResolutionMetrics_Read` (or grant yourself FLS) before concluding anything is wrong.**
+
+**2. `--source-dir force-app` cannot validate or deploy in this repo.** 13 components that
+pre-date this feature fail — 12 `Settings` plus `CleanDataService:DataCloudGeoLocation`, all
+introduced by the `base org metadata` commit and none touched by this branch. The working
+alternative is to deploy the feature's components explicitly by `--metadata`. This is a
+**pre-existing repo defect that will block CI on every future change** and is worth fixing
+separately; it is out of scope for this feature.
 
 ### 7.6 Destructive changes
 
